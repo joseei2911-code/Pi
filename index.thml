@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de TXT con Pi</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f5f5f7;
+            color: #1d1d1f;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        h1 { font-size: 24px; margin-bottom: 20px; color: #0071e3; }
+        label { display: block; margin-bottom: 8px; font-weight: 500; }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid #d2d2d7;
+            border-radius: 12px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #0071e3;
+            color: white;
+            border: none;
+            padding: 14px;
+            width: 100%;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #005bb5; }
+        button:disabled { background-color: #999; cursor: not-allowed; }
+        #status { margin-top: 15px; font-size: 14px; color: #86868b; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Generador de TXT (Pi)</h1>
+    
+    <label for="size">Tamaño del archivo:</label>
+    <input type="number" id="size" value="300" min="1" step="any">
+    
+    <label for="unit">Unidad:</label>
+    <select id="unit">
+        <option value="MB">Megabytes (MB)</option>
+        <option value="KB">Kilobytes (KB)</option>
+        <option value="GB">Gigabytes (GB)</option>
+    </select>
+    
+    <button id="generateBtn" onclick="iniciarGeneracion()">Generar y Descargar</button>
+    <div id="status">Listo para generar</div>
+</div>
+
+<script>
+    // Algoritmo de Spigot optimizado para generar dígitos de Pi secuencialmente
+    function* generadorPi() {
+        let q = 1n, r = 180n, t = 60n, i = 2n;
+        while (true) {
+            let u = 3n * (3n * i + 1n) * (3n * i + 2n);
+            let y = (q * (27n * i - 12n) + 5n * r) / (5n * t);
+            yield Number(y);
+            let q_next = 10n * q * i * (2n * i - 1n);
+            let r_next = 10n * r * (3n * i + 1n) * (3n * i + 2n) - 10n * y * t * (3n * i + 1n) * (3n * i + 2n);
+            r_next += 10n * q * (5n * i - 2n) * (3n * i + 1n) * (3n * i + 2n);
+            let t_next = t * (3n * i + 1n) * (3n * i + 2n);
+            i += 1n; q = q_next; r = r_next; t = t_next;
+        }
+    }
+
+    function iniciarGeneracion() {
+        const sizeInput = parseFloat(document.getElementById('size').value);
+        const unit = document.getElementById('unit').value;
+        const btn = document.getElementById('generateBtn');
+        const status = document.getElementById('status');
+        
+        if (isNaN(sizeInput) || sizeInput <= 0) {
+            alert("Por favor introduce un tamaño válido.");
+            return;
+        }
+
+        // Calcular bytes exactos (1 carácter ASCII = 1 Byte)
+        let factor = 1024 * 1024; // MB por defecto
+        if (unit === 'KB') factor = 1024;
+        if (unit === 'GB') factor = 1024 * 1024 * 1024;
+        const bytesTotales = Math.floor(sizeInput * factor);
+
+        btn.disabled = true;
+        status.innerText = "Calculando decimales de Pi... (Esto puede tardar en archivos grandes)";
+
+        // Usamos setTimeout para no congelar la interfaz del iPad
+        setTimeout(() => {
+            try {
+                const piIterator = generadorPi();
+                
+                // El primer dígito es '3', luego viene el '.'
+                let txt = "3.";
+                let bytesEscritos = 2;
+
+                // Generar los dígitos necesarios en bloques
+                const tamañoBloque = 50000; 
+                
+                while (bytesEscritos < bytesTotales) {
+                    let bloque = "";
+                    const limite = Math.min(tamañoBloque, bytesTotales - bytesEscritos);
+                    
+                    for (let j = 0; j < limite; j++) {
+                        bloque += piIterator.next().value;
+                    }
+                    txt += bloque;
+                    bytesEscritos += limite;
+                }
+
+                status.innerText = "Preparando descarga...";
+
+                // Crear el archivo para su descarga automática
+                const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `pi_${sizeInput}${unit}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                
+                // Limpieza de memoria
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                status.innerText = "¡Archivo descargado con éxito!";
+            } catch (error) {
+                status.innerText = "Error: El archivo es demasiado grande para la memoria del navegador.";
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+            }
+        }, 100);
+    }
+</script>
+
+</body>
+</html>
