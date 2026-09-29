@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="description" content="Generador de archivos grandes compatible con Safari mediante Origin Private File System">
+<title>Generador de archivos grandes - Safari</title>
+<style>
+*{box-sizing:border-box}
+body{
+    margin:0;
+    min-height:100vh;
+    padding:20px;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:#f5f5f7;
+    color:#1d1d1f;
+}
+.container{
+    width:100%;
+    max-width:520px;
+    padding:30px;
+    background:#fff;
+    border-radius:20px;
+    box-shadow:0 10px 35px rgba(0,0,0,.08);
+}
+h1{margin:0 0 25px;text-align:center;font-size:25px;color:#0071e3}
+label{display:block;margin:16px 0 7px;font-size:14px;font-weight:600}
+input,select{
+    width:100%;
+    padding:13px 14px;
+    border:1px solid #d2d2d7;
+    border-radius:12px;
+    background:#fff;
+    color:#1d1d1f;
+    font-size:16px;
+    outline:none;
+}
+input:focus,select:focus{border-color:#0071e3}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px}
+button{
+    width:100%;
+    padding:14px;
+    border:0;
+    border-radius:12px;
+    background:#0071e3;
+    color:#fff;
+    font-size:16px;
+    font-weight:600;
+    cursor:pointer;
+}
+button:hover{background:#005bb5}
+button:disabled{background:#999;cursor:not-allowed}
+#stopBtn{background:#e5e5ea;color:#1d1d1f}
+#stopBtn:hover{background:#d1d1d6}
+progress{width:100%;height:14px}
+.progress{margin-top:22px}
+#status{margin-top:14px;min-height:44px;text-align:center;font-size:14px;color:#6e6e73;line-height:1.5}
+.info{
+    margin-top:18px;
+    padding:13px;
+    border-radius:12px;
+    background:#f5f5f7;
+    font-size:13px;
+    line-height:1.5;
+    color:#6e6e73;
+}
+.note{
+    margin-top:10px;
+    font-size:12px;
+    color:#86868b;
+    line-height:1.45;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Generador de archivos grandes</h1>
+
+    <div class="row">
+        <div>
+            <label for="size">Tamaño</label>
+            <input id="size" type="number" min="1" max="5120" step="1" value="1">
+        </div>
+        <div>
+            <label for="unit">Unidad</label>
+            <select id="unit">
+                <option value="MB">MB</option>
+                <option value="GB">GB</option>
+            </select>
+        </div>
+    </div>
+
+    <label for="type">Contenido</label>
+    <select id="type">
+        <option value="zero">Ceros (más rápido)</option>
+        <option value="random">Bytes aleatorios</option>
+        <option value="text">Texto repetido</option>
+    </select>
+
+    <label for="filename">Nombre del archivo</label>
+    <input id="filename" type="text" value="archivo_grande.bin" autocomplete="off">
+
+    <div class="buttons">
+        <button id="generateBtn">Generar y descargar</button>
+        <button id="stopBtn" disabled>Detener</button>
+    </div>
+
+    <div class="progress">
+        <progress id="progress" value="0" max="100"></progress>
+    </div>
+
+    <div id="status">Listo.</div>
+
+    <div class="info">
+        En Safari se usa el almacenamiento de archivos del navegador (OPFS) para
+        escribir el archivo por bloques y después descargarlo. No se crea un
+        string gigantesco en memoria.
+    </div>
+
+    <div class="note">
+        Para 5 GB necesitas tener al menos ese espacio libre y Safari puede aplicar
+        límites de almacenamiento del sitio. Modo de navegación privada puede no
+        ser compatible con este método.
+    </div>
+</div>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+
+const sizeInput = $("size");
+const unitInput = $("unit");
+const typeInput = $("type");
+const filenameInput = $("filename");
+const generateBtn = $("generateBtn");
+const stopBtn = $("stopBtn");
+const progress = $("progress");
+const status = $("status");
+
+let stopRequested = false;
+let currentHandle = null;
+
+const BLOCK_SIZE = 4 * 1024 * 1024; // 4 MiB
+
+function getTotalBytes() {
+    const size = Number(sizeInput.value);
+
+    if (!Number.isFinite(size) || size <= 0) {
+        throw new Error("Introduce un tamaño válido.");
+    }
+
+    const factor = unitInput.value === "GB"
+        ? 1024 * 1024 * 1024
+        : 1024 * 1024;
+
+    const bytes = Math.floor(size * factor);
+    const max = 5 * 1024 * 1024 * 1024;
+
+    if (bytes > max) {
+        throw new Error("El máximo es 5 GB.");
+    }
+
+    return bytes;
+}
+
+function formatBytes(bytes) {
+    const GB = 1024 ** 3;
+    const MB = 1024 ** 2;
+    const KB = 1024;
+
+    if (bytes >= GB) return (bytes / GB).toFixed(2) + " GB";
+    if (bytes >= MB) return (bytes / MB).toFixed(2) + " MB";
+    if (bytes >= KB) return (bytes / KB).toFixed(2) + " KB";
+    return bytes + " B";
+}
+
+function makeZeroBlock(size) {
+    return new Uint8Array(size);
+}
+
+function makeTextBlock(size) {
+    const source = new TextEncoder().encode(
+        "ARCHIVO DE PRUEBA - 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
+    );
+
+    const block = new Uint8Array(size);
+
+    for (let i = 0; i < size; i++) {
+        block[i] = source[i % source.length];
+    }
+
+    return block;
+}
+
+function makeRandomBlock(size) {
+    const block = new Uint8Array(size);
+    const LIMIT = 65536;
+
+    for (let i = 0; i < size; i += LIMIT) {
+        const end = Math.min(i + LIMIT, size);
+        crypto.getRandomValues(block.subarray(i, end));
+    }
+
+    return block;
+}
+
+/* Safari/modern browsers: Origin Private File System */
+async function getOPFSRoot() {
+    if (!navigator.storage || !navigator.storage.getDirectory) {
+        throw new Error(
+            "Este Safari no expone el almacenamiento de archivos necesario para generar archivos tan grandes desde un HTML local."
+        );
+    }
+
+    return await navigator.storage.getDirectory();
+}
+
+async function removeOldTempFile(root, name) {
+    try {
+        await root.removeEntry(name);
+    } catch (_) {
+        // No existe o Safari no permite borrarlo.
+    }
+}
+
+function safeTempName() {
+    return "__generador_temp_" + Date.now() + ".bin";
+}
+
+async function writeLargeFileOPFS(totalBytes, filename) {
+    const root = await getOPFSRoot();
+
+    const tempName = safeTempName();
+    await removeOldTempFile(root, tempName);
+
+    const handle = await root.getFileHandle(tempName, { create: true });
+    currentHandle = handle;
+
+    const writable = await handle.createWritable();
+
+    let written = 0;
+    const start = performance.now();
+
+    let reusableBlock = null;
+
+    if (typeInput.value === "zero") {
+        reusableBlock = makeZeroBlock(BLOCK_SIZE);
+    } else if (typeInput.value === "text") {
+        reusableBlock = makeTextBlock(BLOCK_SIZE);
+    }
+
+    try {
+        while (written < totalBytes) {
+            if (stopRequested) {
+                await writable.abort();
+                await removeOldTempFile(root, tempName);
+                return null;
+            }
+
+            const remaining = totalBytes - written;
+            const amount = Math.min(BLOCK_SIZE, remaining);
+
+            let block;
+
+            if (typeInput.value === "random") {
+                block = makeRandomBlock(amount);
+            } else if (amount === BLOCK_SIZE) {
+                block = reusableBlock;
+            } else {
+                block = reusableBlock.slice(0, amount);
+            }
+
+            await writable.write(block);
+            written += amount;
+
+            const percent = (written / totalBytes) * 100;
+            const seconds = Math.max(
+                0.001,
+                (performance.now() - start) / 1000
+            );
+            const speed = written / seconds;
+
+            progress.value = percent;
+
+            status.textContent =
+                percent.toFixed(1) + "% · " +
+                formatBytes(written) + " / " +
+                formatBytes(totalBytes) + " · " +
+                formatBytes(speed) + "/s";
+
+            /* Mantiene Safari respirando y actualiza la interfaz. */
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+    } catch (e) {
+        try { await writable.abort(); } catch (_) {}
+        await removeOldTempFile(root, tempName);
+        throw e;
+    }
+
+    await writable.close();
+
+    /*
+     * Recuperamos el archivo desde OPFS.
+     * Esto evita construir un Blob de varios GB mediante un array gigante.
+     */
+    const file = await handle.getFile();
+
+    /*
+     * Se descarga usando un object URL respaldado por el File.
+     * Safari no necesita que nuestro JS tenga una copia del archivo completo.
+     */
+    const url = URL.createObjectURL(file);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    /*
+     * Damos tiempo a Safari a iniciar la descarga antes de revocar la URL.
+     */
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+
+    status.textContent =
+        "Archivo creado. Safari ha iniciado la descarga.";
+
+    /*
+     * Intentamos borrar la copia temporal del almacenamiento del navegador
+     * después de que haya comenzado la descarga.
+     */
+    setTimeout(async () => {
+        try {
+            await removeOldTempFile(root, tempName);
+            currentHandle = null;
+        } catch (_) {}
+    }, 65000);
+
+    return file;
+}
+
+async function start() {
+    stopRequested = false;
+    currentHandle = null;
+
+    generateBtn.disabled = true;
+    stopBtn.disabled = false;
+    progress.value = 0;
+
+    try {
+        const totalBytes = getTotalBytes();
+
+        let filename = filenameInput.value.trim();
+        if (!filename) filename = "archivo_grande.bin";
+
+        if (typeInput.value === "text" &&
+            !filename.toLowerCase().endsWith(".txt")) {
+            filename += ".txt";
+        }
+
+        if ((typeInput.value === "zero" || typeInput.value === "random") &&
+            !filename.toLowerCase().endsWith(".bin")) {
+            filename += ".bin";
+        }
+
+        status.textContent =
+            "Preparando almacenamiento para " +
+            formatBytes(totalBytes) + "...";
+
+        await writeLargeFileOPFS(totalBytes, filename);
+
+    } catch (e) {
+        console.error(e);
+
+        if (e && e.name === "QuotaExceededError") {
+            status.textContent =
+                "Safari se ha quedado sin cuota de almacenamiento para el sitio.";
+        } else if (e && e.name === "NotAllowedError") {
+            status.textContent =
+                "Safari ha bloqueado el acceso al almacenamiento. Prueba fuera de navegación privada.";
+        } else {
+            status.textContent = "Error: " + (e.message || e);
+        }
+    } finally {
+        generateBtn.disabled = false;
+        stopBtn.disabled = true;
+        currentHandle = null;
+    }
+}
+
+generateBtn.addEventListener("click", start);
+
+stopBtn.addEventListener("click", () => {
+    stopRequested = true;
+    status.textContent = "Deteniendo...";
+});
+
+typeInput.addEventListener("change", () => {
+    const current = filenameInput.value.trim();
+
+    if (typeInput.value === "text") {
+        if (!current.toLowerCase().endsWith(".txt")) {
+            filenameInput.value = "archivo_grande.txt";
+        }
+    } else {
+        if (!current.toLowerCase().endsWith(".bin")) {
+            filenameInput.value = "archivo_grande.bin";
+        }
+    }
+});
+</script>
+
+</body>
+</html>
